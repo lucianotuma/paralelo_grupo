@@ -28,8 +28,8 @@ blueprint:
 
     atraso_ms:
       name: Micro-atraso para estabilizar estados (ms)
-      description: Evita “duplo clique” em redes com latência. Recomendo 120–250 ms.
-      default: 150
+      description: Evita “duplo clique” em redes com latência. Recomendo 110–250 ms.
+      default: 110
       selector:
         number:
           min: 0
