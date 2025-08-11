@@ -69,9 +69,7 @@ action:
       estado_grupo: "{{ states(grupo) }}"
 
   # 3) Proteção contra loop: só age se forem diferentes e se o estado for on/off válido
-  - condition: template
-    value_template: >
-      {{ estado_controlador in ['on','off'] }}
+  
 
   # 4) Aciona o grupo (ZHA group/light group) conforme o estado do controlador
   - service: "light.turn_{{ estado_controlador }}"
