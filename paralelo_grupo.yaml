@@ -1,8 +1,8 @@
 blueprint:
-  name: Paralelo Virtual por Grupo
+  name: Paralelo Virtual por Grupo (Força Sempre)
   description: >
-    Sincroniza um grupo com switches controladores de forma confiável.
-    Versão otimizada para evitar loops e falhas.
+    Sincroniza um grupo com switches controladores.
+    Sempre envia o comando, independente do estado atual.
   domain: automation
   source_url: https://github.com/lucianotuma/homeassistant/blueprints/paralelo-grupo.yaml
   input:
@@ -34,26 +34,13 @@ trigger:
     to:
       - "on" 
       - "off"
-    not_from:
-      - "unavailable"
-      - "unknown"
 
 variables:
   grupo: !input grupo_alvo
-  novo_estado: "{{ trigger.to_state.state }}"
-
-condition:
-  # Só executa se o grupo não está já no estado desejado
-  - condition: template
-    value_template: "{{ states(grupo) != novo_estado }}"
 
 action:
-  # Pequeno delay para evitar conflitos na rede Zigbee
-  - delay:
-      milliseconds: 50
-      
-  # Envia o comando usando service (não action!)
-  - service: "homeassistant.turn_{{ novo_estado }}"
+  # Envia o comando SEMPRE, sem verificar estado atual
+  - service: "homeassistant.turn_{{ trigger.to_state.state }}"
     data: {}
     target:
       entity_id: "{{ grupo }}"
