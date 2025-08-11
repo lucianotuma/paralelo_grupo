@@ -15,7 +15,6 @@ blueprint:
           filter:
             - domain: light
             - domain: switch
-
     grupo_alvo:
       name: Grupo alvo
       description: Selecione o grupo que deve ligar/desligar (ZHA Group exposto como light.* ou group/luz do HA)
@@ -25,10 +24,9 @@ blueprint:
           filter:
             - domain: light
             - domain: group
-
     atraso_ms:
       name: Micro-atraso para estabilizar estados (ms)
-      description: Evita “duplo clique” em redes com latência. Recomendo 110–250 ms.
+      description: Evita "duplo clique" em redes com latência. Recomendo 110–250 ms.
       default: 110
       selector:
         number:
@@ -37,7 +35,6 @@ blueprint:
           unit_of_measurement: ms
           mode: slider
           step: 10
-
     espelhar_membros:
       name: Também enviar aos membros do grupo
       description: >
@@ -47,11 +44,20 @@ blueprint:
       selector:
         boolean: {}
 
-mode: restart
+# Mudança importante: mode queued ao invés de restart
+mode: queued
+max: 3
 
 trigger:
   - platform: state
     entity_id: !input controladores
+    # Adiciona filtro para ignorar mudanças de/para unavailable
+    from:
+      - "on"
+      - "off"
+    to:
+      - "on"
+      - "off"
 
 variables:
   grupo: !input grupo_alvo
@@ -59,33 +65,70 @@ variables:
   espelhar_membros: !input espelhar_membros
 
 action:
-  # 1) Espera curta para “assentar” a telemetria antes de comparar estados
+  # 1) Espera curta para "assentar" a telemetria antes de comparar estados
   - delay:
       milliseconds: "{{ atraso_ms | int }}"
-
+  
   # 2) Lê estados atualizados do controlador e do grupo
   - variables:
-      estado_controlador: "{{ states(trigger.entity_id) }}"
+      estado_controlador: "{{ trigger.to_state.state }}"
       estado_grupo: "{{ states(grupo) }}"
-
-  # 3) Aciona o grupo (ZHA group/light group) conforme o estado do controlador
-  - service: "light.turn_{{ estado_controlador }}"
-    target:
-      entity_id: "{{ grupo }}"
-
-  # 4) Opcional: espelha nos membros do grupo (quando houver lista disponível)
+  
+  # 3) Verifica se o estado é válido antes de prosseguir
+  - condition: template
+    value_template: "{{ estado_controlador in ['on', 'off'] }}"
+  
+  # 4) Aciona o grupo apenas se os estados forem diferentes
   - choose:
       - conditions:
           - condition: template
-            value_template: "{{ espelhar_membros | bool }}"
+            value_template: "{{ estado_controlador != estado_grupo }}"
+        sequence:
+          # Usar homeassistant.turn_on/off é mais robusto
+          - choose:
+              - conditions:
+                  - condition: template
+                    value_template: "{{ estado_controlador == 'on' }}"
+                sequence:
+                  - service: homeassistant.turn_on
+                    target:
+                      entity_id: "{{ grupo }}"
+              - conditions:
+                  - condition: template
+                    value_template: "{{ estado_controlador == 'off' }}"
+                sequence:
+                  - service: homeassistant.turn_off
+                    target:
+                      entity_id: "{{ grupo }}"
+  
+  # 5) Opcional: espelha nos membros do grupo (quando houver lista disponível)
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ espelhar_membros | bool and estado_controlador != estado_grupo }}"
         sequence:
           - variables:
               membros: >
                 {% set lista = state_attr(grupo, 'entity_id') %}
-                {% if lista is iterable %}{{ lista }}
-                {% else %}[]{% endif %}
+                {% if lista is iterable and lista is not string %}
+                  {{ lista | list }}
+                {% else %}
+                  []
+                {% endif %}
           - condition: template
             value_template: "{{ membros | count > 0 }}"
-          - service: "homeassistant.turn_{{ estado_controlador }}"
-            target:
-              entity_id: "{{ membros }}"
+          - choose:
+              - conditions:
+                  - condition: template
+                    value_template: "{{ estado_controlador == 'on' }}"
+                sequence:
+                  - service: homeassistant.turn_on
+                    target:
+                      entity_id: "{{ membros }}"
+              - conditions:
+                  - condition: template
+                    value_template: "{{ estado_controlador == 'off' }}"
+                sequence:
+                  - service: homeassistant.turn_off
+                    target:
+                      entity_id: "{{ membros }}"
