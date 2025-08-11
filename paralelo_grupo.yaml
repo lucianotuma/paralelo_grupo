@@ -7,7 +7,6 @@ blueprint:
   input:
     controladores:
       name: Canais/entidades controladoras
-      description: Selecione os switches que controlam o grupo
       selector:
         entity:
           multiple: true
@@ -15,30 +14,43 @@ blueprint:
             - domain: light
             - domain: switch
     grupo_alvo:
-      name: Grupo alvo
-      description: Selecione o grupo que deve ser controlado
+      name: Grupo alvo (preferir ZHA Group: light.zha_group_*)
       selector:
         entity:
           multiple: false
           filter:
             - domain: light
             - domain: group
+    atraso_ms:
+      name: Atraso (ms) opcional para debounce
+      default: 0
+      selector:
+        number:
+          min: 0
+          max: 1000
+          unit_of_measurement: ms
+          mode: box
 
-mode: restart
-max_exceeded: silent
+mode: queued
+max: 10
 
 trigger:
   - platform: state
     entity_id: !input controladores
-    to:
-      - "on" 
+    to: 
+      - "on"
       - "off"
 
 variables:
   grupo: !input grupo_alvo
+  atraso: !input atraso_ms
+  to_state: "{{ 'on' if trigger.to_state.state == 'on' else 'off' }}"
 
 action:
-  - service: "homeassistant.turn_{{ trigger.to_state.state }}"
-    data: {}
-    target:
-      entity_id: "{{ grupo }}"
+  - choose: []
+    default:
+      - delay:
+          milliseconds: "{{ atraso }}"
+      - service: "homeassistant.turn_{{ to_state }}"
+        target:
+          entity_id: "{{ grupo }}"
