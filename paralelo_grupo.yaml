@@ -1,0 +1,101 @@
+blueprint:
+  name: Paralelo Virtual por Grupo (com proteção de loop)
+  description: >
+    Sincroniza um grupo (ZHA Group ou group do HA) com cliques em um ou mais canais (ex.: TS0003),
+    com proteção contra loop e pequeno atraso para evitar corridas de estado.
+  domain: automation
+  source_url: https://example.local/blueprints/paralelo-grupo-protecao
+  input:
+    controladores:
+      name: Canais/entidades controladoras
+      description: Selecione os canais do TS0003 (ou outras entidades on/off) que disparam o paralelo
+      selector:
+        entity:
+          multiple: true
+          filter:
+            - domain: light
+            - domain: switch
+
+    grupo_alvo:
+      name: Grupo alvo
+      description: Selecione o grupo que deve ligar/desligar (ZHA Group exposto como light.* ou group/luz do HA)
+      selector:
+        entity:
+          multiple: false
+          filter:
+            - domain: light
+            - domain: group
+
+    atraso_ms:
+      name: Micro-atraso para estabilizar estados (ms)
+      description: Evita “duplo clique” em redes com latência. Recomendo 120–250 ms.
+      default: 150
+      selector:
+        number:
+          min: 0
+          max: 1000
+          unit_of_measurement: ms
+          mode: slider
+          step: 10
+
+    espelhar_membros:
+      name: Também enviar aos membros do grupo
+      description: >
+        Além de acionar o grupo, envia o mesmo comando a todos os membros conhecidos do grupo (se houver).
+        Útil se algum dispositivo do grupo não responder ao broadcast do grupo.
+      default: false
+      selector:
+        boolean: {}
+
+mode: restart
+
+trigger:
+  - platform: state
+    entity_id: !input controladores
+
+variables:
+  grupo: !input grupo_alvo
+  atraso_ms: !input atraso_ms
+  espelhar_membros: !input espelhar_membros
+
+action:
+  # 1) Espera curta para “assentar” a telemetria antes de comparar estados
+  - delay:
+      milliseconds: "{{ atraso_ms | int }}"
+
+  # 2) Lê estados atualizados do controlador que disparou e do grupo
+  - variables:
+      estado_controlador: "{{ states(trigger.entity_id) }}"
+      estado_grupo: "{{ states(grupo) }}"
+
+  # 3) Proteção contra loop: só age se forem diferentes e se o estado for on/off válido
+  - condition: template
+    value_template: >
+      {{ estado_controlador in ['on','off'] and estado_controlador != estado_grupo }}
+
+  # 4) Aciona o grupo (ZHA group/light group) conforme o estado do controlador
+  - service: "light.turn_{{ estado_controlador }}"
+    target:
+      entity_id: "{{ grupo }}"
+
+  # 5) Opcional: espelha nos membros do grupo (quando houver lista disponível)
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ espelhar_membros | bool }}"
+        sequence:
+          # Tenta obter membros do grupo:
+          # - Se for group do HA, state_attr(grupo, 'entity_id') retorna a lista
+          # - Se não houver lista, 'membros' vira lista vazia e nada acontece
+          - variables:
+              membros: >
+                {% set lista = state_attr(grupo, 'entity_id') %}
+                {% if lista is iterable %}{{ lista }}
+                {% else %}[]{% endif %}
+
+          - condition: template
+            value_template: "{{ membros | count > 0 }}"
+
+          - service: "homeassistant.turn_{{ estado_controlador }}"
+            target:
+              entity_id: "{{ membros }}"
