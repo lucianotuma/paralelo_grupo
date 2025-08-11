@@ -1,12 +1,14 @@
 blueprint:
-  name: Paralelo Virtual por Grupo (Força Sempre)
+  name: Paralelo Virtual por Grupo (Força Sempre • com fila, debounce e anti-loop)
   description: >
-    Sincroniza um grupo com switches controladores.
-    Sempre envia o comando, independente do estado atual.
+    Sincroniza um grupo com switches/luzes controladores. Sempre envia o comando
+    (on/off) do controlador para o grupo, com proteção contra corrida/loop mesmo
+    quando os controladores fazem parte do próprio ZHA Group.
   domain: automation
   input:
     controladores:
       name: Canais/entidades controladoras
+      description: Selecione os switches/luzes que controlam o grupo (podem estar no mesmo ZHA Group)
       selector:
         entity:
           multiple: true
@@ -15,6 +17,7 @@ blueprint:
             - domain: switch
     grupo_alvo:
       name: Grupo alvo (preferir ZHA Group: light.zha_group_*)
+      description: Selecione o grupo que deve ser controlado (ideal: light.zha_group_…)
       selector:
         entity:
           multiple: false
@@ -22,8 +25,9 @@ blueprint:
             - domain: light
             - domain: group
     atraso_ms:
-      name: Atraso (ms) opcional para debounce
-      default: 0
+      name: Atraso (ms) para debounce (opcional)
+      description: Atraso curto para consolidar cliques quase simultâneos (recomendado 100–250 ms)
+      default: 180
       selector:
         number:
           min: 0
@@ -32,12 +36,13 @@ blueprint:
           mode: box
 
 mode: queued
-max: 10
+max: 20
+max_exceeded: silent
 
 trigger:
   - platform: state
     entity_id: !input controladores
-    to: 
+    to:
       - "on"
       - "off"
 
@@ -45,12 +50,32 @@ variables:
   grupo: !input grupo_alvo
   atraso: !input atraso_ms
   to_state: "{{ 'on' if trigger.to_state.state == 'on' else 'off' }}"
+  # Estado atual do grupo no momento do disparo
+  grupo_state: "{{ states(grupo) | lower }}"
+
+# Anti-loop: ignora mudanças cujo contexto foi gerado por esta própria automação
+# (controladores no mesmo grupo receberão o broadcast; esta condição evita reentradas)
+condition:
+  - condition: template
+    value_template: >
+      {{ trigger.to_state.context.id != this.context.id
+         and trigger.to_state.context.parent_id != this.context.id }}
 
 action:
-  - choose: []
-    default:
-      - delay:
-          milliseconds: "{{ atraso }}"
-      - service: "homeassistant.turn_{{ to_state }}"
-        target:
-          entity_id: "{{ grupo }}"
+  # Debounce curto para consolidar bursts on/off
+  - delay:
+      milliseconds: "{{ atraso | int }}"
+
+  # Se o grupo já está no estado desejado, não faz nada (evita flicker)
+  - condition: template
+    value_template: "{{ states(grupo) | lower != to_state }}"
+
+  # Envia o comando ao grupo (preferir serviço de light para ZHA Group)
+  - service: >
+      {% if (grupo | string).startswith('light.') %}
+        light.turn_{{ to_state }}
+      {% else %}
+        homeassistant.turn_{{ to_state }}
+      {% endif %}
+    target:
+      entity_id: "{{ grupo }}"
