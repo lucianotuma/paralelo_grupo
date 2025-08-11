@@ -36,8 +36,7 @@ blueprint:
           mode: slider
           step: 10
 
-mode: queued
-max: 3
+mode: restart
 
 trigger:
   - platform: state
@@ -60,6 +59,6 @@ action:
       novo_estado: "{{ trigger.to_state.state }}"
   
   # Envia comando ao grupo
-  - service: "light.turn_{{ novo_estado }}"
+  - service: "homeassistant.turn_{{ novo_estado }}"
     target:
       entity_id: "{{ grupo }}"
