@@ -1,10 +1,10 @@
 blueprint:
-  name: Paralelo Virtual por Grupo (com proteção de loop)
+  name: Paralelo Virtual por Grupo (com proteção + fallback ON)
   description: >
-    Sincroniza um grupo (ZHA Group ou group do HA) com cliques em um ou mais canais (ex.: TS0003),
-    com proteção contra loop e pequeno atraso para evitar corridas de estado.
+    Sincroniza um grupo (ZHA Group ou group do HA) com cliques em um ou mais canais (ex.: TS0003).
+    Protege contra loop e, ao ligar (ON), sempre envia broadcast + varre por unicast quem ficou OFF.
   domain: automation
-  source_url: https://example.local/blueprints/paralelo-grupo-protecao
+  source_url: https://example.local/blueprints/paralelo-grupo-protecao-opcao2
   input:
     controladores:
       name: Canais/entidades controladoras
@@ -18,7 +18,7 @@ blueprint:
 
     grupo_alvo:
       name: Grupo alvo
-      description: Selecione o grupo que deve ligar/desligar (ZHA Group exposto como light.* ou group/luz do HA)
+      description: Selecione o grupo a ser controlado (ZHA Group exposto como light.* ou group do HA)
       selector:
         entity:
           multiple: false
@@ -28,8 +28,8 @@ blueprint:
 
     atraso_ms:
       name: Micro-atraso para estabilizar estados (ms)
-      description: Evita “duplo clique” em redes com latência. Recomendo 120–250 ms.
-      default: 150
+      description: Evita “duplo clique” por corridas de estado. Recomendo 150–300 ms.
+      default: 200
       selector:
         number:
           min: 0
@@ -39,13 +39,26 @@ blueprint:
           step: 10
 
     espelhar_membros:
-      name: Também enviar aos membros do grupo
+      name: Fallback ON: varrer membros do grupo por unicast
       description: >
-        Além de acionar o grupo, envia o mesmo comando a todos os membros conhecidos do grupo (se houver).
-        Útil se algum dispositivo do grupo não responder ao broadcast do grupo.
-      default: false
+        Após enviar ON ao grupo, ligar individualmente (unicast) quem permanecer OFF.
+        Para group do HA funciona automaticamente; para ZHA Group, preencha o campo abaixo se necessário.
+      default: true
       selector:
         boolean: {}
+
+    membros_grupo_overrides:
+      name: (Opcional) Lista manual de membros do grupo
+      description: >
+        Se o grupo selecionado não expõe state_attr(..., 'entity_id') (caso comum em ZHA Group),
+        informe aqui os entity_ids das luzes/dispositivos que compõem o grupo para o fallback.
+      default: []
+      selector:
+        entity:
+          multiple: true
+          filter:
+            - domain: light
+            - domain: switch
 
 mode: restart
 
@@ -57,9 +70,10 @@ variables:
   grupo: !input grupo_alvo
   atraso_ms: !input atraso_ms
   espelhar_membros: !input espelhar_membros
+  membros_over: !input membros_grupo_overrides
 
 action:
-  # 1) Espera curta para “assentar” a telemetria antes de comparar estados
+  # 1) Espera curta para “assentar” telemetria antes de comparar/enviar
   - delay:
       milliseconds: "{{ atraso_ms | int }}"
 
@@ -68,34 +82,51 @@ action:
       estado_controlador: "{{ states(trigger.entity_id) }}"
       estado_grupo: "{{ states(grupo) }}"
 
-  # 3) Proteção contra loop: só age se forem diferentes e se o estado for on/off válido
-  - condition: template
-    value_template: >
-      {{ estado_controlador in ['on','off'] and estado_controlador != estado_grupo }}
-
-  # 4) Aciona o grupo (ZHA group/light group) conforme o estado do controlador
-  - service: "light.turn_{{ estado_controlador }}"
-    target:
-      entity_id: "{{ grupo }}"
-
-  # 5) Opcional: espelha nos membros do grupo (quando houver lista disponível)
+  # 3) OFF: só envia se o grupo não estiver OFF (proteção contra loop)
   - choose:
-      - conditions:
-          - condition: template
-            value_template: "{{ espelhar_membros | bool }}"
+      - conditions: "{{ estado_controlador == 'off' and estado_grupo != 'off' }}"
         sequence:
-          # Tenta obter membros do grupo:
-          # - Se for group do HA, state_attr(grupo, 'entity_id') retorna a lista
-          # - Se não houver lista, 'membros' vira lista vazia e nada acontece
-          - variables:
-              membros: >
-                {% set lista = state_attr(grupo, 'entity_id') %}
-                {% if lista is iterable %}{{ lista }}
-                {% else %}[]{% endif %}
-
-          - condition: template
-            value_template: "{{ membros | count > 0 }}"
-
-          - service: "homeassistant.turn_{{ estado_controlador }}"
+          - service: homeassistant.turn_off
             target:
-              entity_id: "{{ membros }}"
+              entity_id: "{{ grupo }}"
+
+  # 4) ON: sempre envia (comportamento da UI) + fallback por unicast
+  - choose:
+      - conditions: "{{ estado_controlador == 'on' }}"
+        sequence:
+          # 4.1) Broadcast ON no grupo
+          - service: homeassistant.turn_on
+            target:
+              entity_id: "{{ grupo }}"
+
+          # 4.2) Fallback (opcional): varre membros que permaneceram OFF e liga por unicast
+          - choose:
+              - conditions:
+                  - condition: template
+                    value_template: "{{ espelhar_membros | bool }}"
+                sequence:
+                  - delay: "00:00:00.20"  # 200 ms para atualização de estados
+
+                  # Tenta obter membros do group do HA; se vazio, usa a lista manual (overrides)
+                  - variables:
+                      membros_attr: >
+                        {% set lista = state_attr(grupo, 'entity_id') %}
+                        {% if lista is iterable %}{{ lista }}{% else %}[]{% endif %}
+                      membros_lista: >
+                        {% set a = membros_attr if membros_attr is iterable else [] %}
+                        {% set b = membros_over if membros_over is iterable else [] %}
+                        {{ (a + b) | unique }}
+
+                      ainda_off: >
+                        {% set r = [] %}
+                        {% for e in membros_lista if states(e) == 'off' %}
+                          {% set _ = r.append(e) %}
+                        {% endfor %}
+                        {{ r }}
+
+                  - condition: template
+                    value_template: "{{ ainda_off | count > 0 }}"
+
+                  - service: homeassistant.turn_on
+                    target:
+                      entity_id: "{{ ainda_off }}"
