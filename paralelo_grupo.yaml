@@ -1,14 +1,14 @@
 blueprint:
-  name: Paralelo Virtual por Grupo (Anti-Loop)
+  name: Paralelo Virtual por Grupo
   description: >
-    Sincroniza um grupo com switches controladores, evitando loops quando
-    os controladores fazem parte do grupo.
+    Sincroniza um grupo com switches controladores de forma confiável.
+    Versão otimizada para evitar loops e falhas.
   domain: automation
-  source_url: https://example.local/blueprints/paralelo-grupo-antiloop
+  source_url: https://github.com/lucianotuma/homeassistant/blueprints/paralelo-grupo.yaml
   input:
     controladores:
       name: Canais/entidades controladoras
-      description: Selecione os canais do TS0003 (ou outras entidades on/off) que disparam o paralelo
+      description: Selecione os switches que controlam o grupo
       selector:
         entity:
           multiple: true
@@ -17,59 +17,43 @@ blueprint:
             - domain: switch
     grupo_alvo:
       name: Grupo alvo
-      description: Selecione o grupo que deve ligar/desligar (ZHA Group exposto como light.* ou group/luz do HA)
+      description: Selecione o grupo que deve ser controlado
       selector:
         entity:
           multiple: false
           filter:
             - domain: light
             - domain: group
-    atraso_ms:
-      name: Atraso para estabilizar estados (ms)
-      description: Evita loops e comandos duplicados. Recomendo 200–300 ms.
-      default: 250
-      selector:
-        number:
-          min: 100
-          max: 1000
-          unit_of_measurement: ms
-          mode: slider
-          step: 50
 
 mode: restart
+max_exceeded: silent
 
 trigger:
   - platform: state
     entity_id: !input controladores
     to:
-      - "on"
+      - "on" 
       - "off"
-
-condition:
-  # Evita loop - só executa se a mudança NÃO foi causada pela própria automação
-  - condition: template
-    value_template: >
-      {{ trigger.to_state.context.parent_id != this.context.id and
-         trigger.to_state.context.id != this.context.id }}
+    not_from:
+      - "unavailable"
+      - "unknown"
 
 variables:
   grupo: !input grupo_alvo
-  atraso_ms: !input atraso_ms
+  novo_estado: "{{ trigger.to_state.state }}"
 
-action:
-  # Atraso para estabilizar e evitar loops
-  - delay:
-      milliseconds: "{{ atraso_ms | int }}"
-  
-  # Pega o novo estado do controlador
-  - variables:
-      novo_estado: "{{ trigger.to_state.state }}"
-  
-  # Verifica se o grupo já não está no estado desejado
+condition:
+  # Só executa se o grupo não está já no estado desejado
   - condition: template
     value_template: "{{ states(grupo) != novo_estado }}"
-  
-  # Envia comando ao grupo usando serviço correto
+
+action:
+  # Pequeno delay para evitar conflitos na rede Zigbee
+  - delay:
+      milliseconds: 50
+      
+  # Envia o comando usando service (não action!)
   - service: "homeassistant.turn_{{ novo_estado }}"
+    data: {}
     target:
       entity_id: "{{ grupo }}"
