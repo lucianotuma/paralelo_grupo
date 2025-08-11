@@ -1,3 +1,6 @@
+Aqui está o seu blueprint com o mapeamento **`comando_onoff`** inserido para garantir que só seja enviado **`on`** ou **`off`** (qualquer outro estado é ignorado com `skip`):
+
+```yaml
 blueprint:
   name: Paralelo Virtual por Grupo (com proteção de loop)
   description: >
@@ -63,37 +66,43 @@ action:
   - delay:
       milliseconds: "{{ atraso_ms | int }}"
 
-  # 2) Lê estados atualizados do controlador que disparou e do grupo
+  # 2) Lê estados atualizados do controlador e do grupo + mapeia on/off com proteção
   - variables:
       estado_controlador: "{{ states(trigger.entity_id) }}"
       estado_grupo: "{{ states(grupo) }}"
+      comando_onoff: >
+        {% if estado_controlador == 'on' %}
+          on
+        {% elif estado_controlador == 'off' %}
+          off
+        {% else %}
+          skip
+        {% endif %}
 
-  # 3) Proteção contra loop: só age se forem diferentes e se o estado for on/off válido
-  
+  # 3) Só continua se o comando for on/off (ignora unavailable/unknown etc.)
+  - condition: template
+    value_template: "{{ comando_onoff != 'skip' }}"
 
-  # 4) Aciona o grupo (ZHA group/light group) conforme o estado do controlador
-  - service: "light.turn_{{ estado_controlador }}"
+  # 4) Aciona o grupo (ZHA group/light group) apenas com on/off garantido
+  - service: "light.turn_{{ comando_onoff }}"
     target:
       entity_id: "{{ grupo }}"
 
-  # 5) Opcional: espelha nos membros do grupo (quando houver lista disponível)
+  # 5) Opcional: espelha on/off nos membros do grupo (quando houver lista disponível)
   - choose:
       - conditions:
           - condition: template
             value_template: "{{ espelhar_membros | bool }}"
         sequence:
-          # Tenta obter membros do grupo:
-          # - Se for group do HA, state_attr(grupo, 'entity_id') retorna a lista
-          # - Se não houver lista, 'membros' vira lista vazia e nada acontece
           - variables:
               membros: >
                 {% set lista = state_attr(grupo, 'entity_id') %}
-                {% if lista is iterable %}{{ lista }}
-                {% else %}[]{% endif %}
-
+                {% if lista is iterable %}{{ lista }}{% else %}[]{% endif %}
           - condition: template
             value_template: "{{ membros | count > 0 }}"
-
-          - service: "homeassistant.turn_{{ estado_controlador }}"
+          - service: "homeassistant.turn_{{ comando_onoff }}"
             target:
               entity_id: "{{ membros }}"
+```
+
+Se quiser, eu adapto agora com seus `entity_id` reais (três canais e o grupo) e te entrego a automação já instanciada.
