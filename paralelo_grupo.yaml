@@ -4,7 +4,6 @@ blueprint:
     Sincroniza um grupo com switches controladores.
     Sempre envia o comando, independente do estado atual.
   domain: automation
-  source_url: https://github.com/lucianotuma/homeassistant/blueprints/paralelo-grupo.yaml
   input:
     controladores:
       name: Canais/entidades controladoras
@@ -39,7 +38,6 @@ variables:
   grupo: !input grupo_alvo
 
 action:
-  # Envia o comando SEMPRE, sem verificar estado atual
   - service: "homeassistant.turn_{{ trigger.to_state.state }}"
     data: {}
     target:
