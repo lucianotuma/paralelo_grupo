@@ -16,7 +16,7 @@ blueprint:
             - domain: light
             - domain: switch
     grupo_alvo:
-      name: Grupo Alvo
+      name: Grupo
       description: Selecione o grupo que deve ser controlado (ideal: light.zha_group_…)
       selector:
         entity:
