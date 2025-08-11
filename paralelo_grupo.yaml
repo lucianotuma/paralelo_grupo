@@ -105,7 +105,7 @@ action:
   - choose:
       - conditions:
           - condition: template
-            value_template: "{{ espelhar_membros | bool and estado_controlador != estado_grupo }}"
+            value_template: "{{ espelhar_membros | bool }}"
         sequence:
           - variables:
               membros: >
