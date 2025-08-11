@@ -254,3 +254,167 @@ action:
                   - service: homeassistant.turn_on
                     target:
                       entity_id: "{{ ainda_off }}"
+blueprint:
+  name: Paralelo Virtual por Grupo (Otimizado)
+  description: >-
+    Sincroniza um grupo (ZHA Group ou group do HA) com cliques em um ou mais canais.
+    Protege contra loops e, ao ligar (ON), sempre envia broadcast + varre por unicast quem ficou OFF.
+  domain: automation
+  source_url: https://example.local/blueprints/paralelo-grupo-protecao-otimizado
+  
+  input:
+    controladores:
+      name: Canais/entidades controladoras
+      description: Selecione os canais do TS0003 (ou outras entidades on/off) que disparam o paralelo
+      selector:
+        entity:
+          multiple: true
+          domain:
+            - light
+            - switch
+
+    grupo_alvo:
+      name: Grupo alvo
+      description: Selecione o grupo a ser controlado (ZHA Group ou group do HA)
+      selector:
+        entity:
+          multiple: false
+          domain:
+            - light
+            - group
+
+    atraso_ms:
+      name: Micro-atraso para estabilizar estados (ms)
+      description: Evita "duplo clique" por corridas de estado. Recomendado 150-300 ms.
+      default: 200
+      selector:
+        number:
+          min: 0
+          max: 1000
+          unit_of_measurement: ms
+          mode: slider
+          step: 10
+
+    espelhar_membros:
+      name: "Fallback ON: varrer membros do grupo"
+      description: >-
+        Após enviar ON ao grupo, ligar individualmente (unicast) quem permanecer OFF.
+        Para group do HA funciona automaticamente; para ZHA Group, preencha o campo abaixo.
+      default: true
+      selector:
+        boolean:
+
+    membros_grupo_overrides:
+      name: Lista manual de membros (opcional)
+      description: >-
+        Se o grupo não expõe entity_id (comum em ZHA Group),
+        informe aqui os membros para o fallback funcionar.
+      default: []
+      selector:
+        entity:
+          multiple: true
+          domain:
+            - light
+            - switch
+
+mode: restart
+max_exceeded: silent
+
+trigger:
+  - platform: state
+    entity_id: !input controladores
+    from:
+      - "on"
+      - "off"
+    to:
+      - "on"
+      - "off"
+
+variables:
+  grupo: !input grupo_alvo
+  atraso_ms: !input atraso_ms
+  espelhar_membros: !input espelhar_membros
+  membros_over: !input membros_grupo_overrides
+  estado_controlador: "{{ trigger.to_state.state }}"
+  estado_grupo: "{{ states(grupo) }}"
+
+condition:
+  # Evita processamento se estados já estão sincronizados
+  - condition: template
+    value_template: "{{ estado_controlador != estado_grupo }}"
+
+action:
+  # Atraso anti-bounce único no início
+  - delay:
+      milliseconds: "{{ atraso_ms | int(200) }}"
+  
+  # Ação principal baseada no estado do controlador
+  - choose:
+      # Desligar grupo
+      - conditions:
+          - condition: template
+            value_template: "{{ estado_controlador == 'off' }}"
+        sequence:
+          - service: homeassistant.turn_off
+            target:
+              entity_id: "{{ grupo }}"
+            data:
+              transition: 0
+      
+      # Ligar grupo e aplicar fallback se necessário
+      - conditions:
+          - condition: template
+            value_template: "{{ estado_controlador == 'on' }}"
+        sequence:
+          # Liga o grupo via broadcast
+          - service: homeassistant.turn_on
+            target:
+              entity_id: "{{ grupo }}"
+            data:
+              transition: 0
+          
+          # Fallback para membros que não responderam
+          - choose:
+              - conditions:
+                  - condition: template
+                    value_template: "{{ espelhar_membros }}"
+                sequence:
+                  # Pequeno delay para permitir resposta ao broadcast
+                  - delay:
+                      milliseconds: 200
+                  
+                  # Identificar e ligar membros ainda OFF
+                  - variables:
+                      # Obter membros do grupo de forma mais eficiente
+                      membros_grupo: >-
+                        {%- set attrs = state_attr(grupo, 'entity_id') -%}
+                        {%- if attrs is sequence and attrs is not string -%}
+                          {{- attrs | list -}}
+                        {%- else -%}
+                          {{- [] -}}
+                        {%- endif -%}
+                      
+                      # Combinar com overrides sem duplicatas
+                      todos_membros: >-
+                        {%- set manual = membros_over if membros_over else [] -%}
+                        {{- (membros_grupo + manual) | unique | list -}}
+                      
+                      # Filtrar apenas os que estão OFF
+                      membros_off: >-
+                        {%- set ns = namespace(off=[]) -%}
+                        {%- for entidade in todos_membros -%}
+                          {%- if states(entidade) == 'off' -%}
+                            {%- set ns.off = ns.off + [entidade] -%}
+                          {%- endif -%}
+                        {%- endfor -%}
+                        {{- ns.off -}}
+                  
+                  # Ligar membros OFF se houver algum
+                  - condition: template
+                    value_template: "{{ membros_off | length > 0 }}"
+                  
+                  - service: homeassistant.turn_on
+                    target:
+                      entity_id: "{{ membros_off }}"
+                    data:
+                      transition: 0
