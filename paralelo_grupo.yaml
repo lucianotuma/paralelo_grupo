@@ -1,6 +1,3 @@
-Aqui está o seu blueprint com o mapeamento **`comando_onoff`** inserido para garantir que só seja enviado **`on`** ou **`off`** (qualquer outro estado é ignorado com `skip`):
-
-```yaml
 blueprint:
   name: Paralelo Virtual por Grupo (com proteção de loop)
   description: >
@@ -18,7 +15,6 @@ blueprint:
           filter:
             - domain: light
             - domain: switch
-
     grupo_alvo:
       name: Grupo alvo
       description: Selecione o grupo que deve ligar/desligar (ZHA Group exposto como light.* ou group/luz do HA)
@@ -28,10 +24,9 @@ blueprint:
           filter:
             - domain: light
             - domain: group
-
     atraso_ms:
       name: Micro-atraso para estabilizar estados (ms)
-      description: Evita “duplo clique” em redes com latência. Recomendo 110–250 ms.
+      description: Evita "duplo clique" em redes com latência. Recomendo 110–250 ms.
       default: 110
       selector:
         number:
@@ -40,7 +35,6 @@ blueprint:
           unit_of_measurement: ms
           mode: slider
           step: 10
-
     espelhar_membros:
       name: Também enviar aos membros do grupo
       description: >
@@ -49,23 +43,18 @@ blueprint:
       default: false
       selector:
         boolean: {}
-
 mode: restart
-
 trigger:
   - platform: state
     entity_id: !input controladores
-
 variables:
   grupo: !input grupo_alvo
   atraso_ms: !input atraso_ms
   espelhar_membros: !input espelhar_membros
-
 action:
-  # 1) Espera curta para “assentar” a telemetria antes de comparar estados
+  # 1) Espera curta para "assentar" a telemetria antes de comparar estados
   - delay:
       milliseconds: "{{ atraso_ms | int }}"
-
   # 2) Lê estados atualizados do controlador e do grupo + mapeia on/off com proteção
   - variables:
       estado_controlador: "{{ states(trigger.entity_id) }}"
@@ -78,16 +67,13 @@ action:
         {% else %}
           skip
         {% endif %}
-
   # 3) Só continua se o comando for on/off (ignora unavailable/unknown etc.)
   - condition: template
     value_template: "{{ comando_onoff != 'skip' }}"
-
   # 4) Aciona o grupo (ZHA group/light group) apenas com on/off garantido
   - service: "light.turn_{{ comando_onoff }}"
     target:
       entity_id: "{{ grupo }}"
-
   # 5) Opcional: espelha on/off nos membros do grupo (quando houver lista disponível)
   - choose:
       - conditions:
@@ -103,6 +89,3 @@ action:
           - service: "homeassistant.turn_{{ comando_onoff }}"
             target:
               entity_id: "{{ membros }}"
-```
-
-Se quiser, eu adapto agora com seus `entity_id` reais (três canais e o grupo) e te entrego a automação já instanciada.
