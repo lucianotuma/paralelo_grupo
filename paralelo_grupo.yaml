@@ -36,8 +36,8 @@ blueprint:
           mode: slider
           step: 10
 
-mode: single
-max_exceeded: silent
+mode: queued
+max: 3
 
 trigger:
   - platform: state
