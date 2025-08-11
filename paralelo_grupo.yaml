@@ -1,10 +1,10 @@
 blueprint:
-  name: Paralelo Virtual por Grupo (com proteção de loop)
+  name: Paralelo Virtual por Grupo (Simplificado)
   description: >
-    Sincroniza um grupo (ZHA Group ou group do HA) com cliques em um ou mais canais (ex.: TS0003),
-    com proteção contra loop e pequeno atraso para evitar corridas de estado.
+    Sincroniza um grupo (ZHA Group ou group do HA) com cliques em um ou mais canais (ex.: TS0003).
+    Versão simplificada que controla apenas o grupo.
   domain: automation
-  source_url: https://example.local/blueprints/paralelo-grupo-protecao
+  source_url: https://example.local/blueprints/paralelo-grupo-simples
   input:
     controladores:
       name: Canais/entidades controladoras
@@ -25,36 +25,23 @@ blueprint:
             - domain: light
             - domain: group
     atraso_ms:
-      name: Micro-atraso para estabilizar estados (ms)
-      description: Evita "duplo clique" em redes com latência. Recomendo 110–250 ms.
-      default: 110
+      name: Atraso para estabilizar estados (ms)
+      description: Evita comandos duplicados. Recomendo 100–200 ms.
+      default: 150
       selector:
         number:
           min: 0
-          max: 1000
+          max: 500
           unit_of_measurement: ms
           mode: slider
           step: 10
-    espelhar_membros:
-      name: Também enviar aos membros do grupo
-      description: >
-        Além de acionar o grupo, envia o mesmo comando a todos os membros conhecidos do grupo (se houver).
-        Útil se algum dispositivo do grupo não responder ao broadcast do grupo.
-      default: false
-      selector:
-        boolean: {}
 
-# Mudança importante: mode queued ao invés de restart
-mode: queued
-max: 3
+mode: single
+max_exceeded: silent
 
 trigger:
   - platform: state
     entity_id: !input controladores
-    # Adiciona filtro para ignorar mudanças de/para unavailable
-    from:
-      - "on"
-      - "off"
     to:
       - "on"
       - "off"
@@ -62,73 +49,17 @@ trigger:
 variables:
   grupo: !input grupo_alvo
   atraso_ms: !input atraso_ms
-  espelhar_membros: !input espelhar_membros
 
 action:
-  # 1) Espera curta para "assentar" a telemetria antes de comparar estados
+  # Pequeno atraso para evitar múltiplos disparos
   - delay:
       milliseconds: "{{ atraso_ms | int }}"
   
-  # 2) Lê estados atualizados do controlador e do grupo
+  # Pega o novo estado do controlador
   - variables:
-      estado_controlador: "{{ trigger.to_state.state }}"
-      estado_grupo: "{{ states(grupo) }}"
+      novo_estado: "{{ trigger.to_state.state }}"
   
-  # 3) Verifica se o estado é válido antes de prosseguir
-  - condition: template
-    value_template: "{{ estado_controlador in ['on', 'off'] }}"
-  
-  # 4) Aciona o grupo apenas se os estados forem diferentes
-  - choose:
-      - conditions:
-          - condition: template
-            value_template: "{{ estado_controlador != estado_grupo }}"
-        sequence:
-          # Usar homeassistant.turn_on/off é mais robusto
-          - choose:
-              - conditions:
-                  - condition: template
-                    value_template: "{{ estado_controlador == 'on' }}"
-                sequence:
-                  - service: homeassistant.turn_on
-                    target:
-                      entity_id: "{{ grupo }}"
-              - conditions:
-                  - condition: template
-                    value_template: "{{ estado_controlador == 'off' }}"
-                sequence:
-                  - service: homeassistant.turn_off
-                    target:
-                      entity_id: "{{ grupo }}"
-  
-  # 5) Opcional: espelha nos membros do grupo (quando houver lista disponível)
-  - choose:
-      - conditions:
-          - condition: template
-            value_template: "{{ espelhar_membros | bool }}"
-        sequence:
-          - variables:
-              membros: >
-                {% set lista = state_attr(grupo, 'entity_id') %}
-                {% if lista is iterable and lista is not string %}
-                  {{ lista | list }}
-                {% else %}
-                  []
-                {% endif %}
-          - condition: template
-            value_template: "{{ membros | count > 0 }}"
-          - choose:
-              - conditions:
-                  - condition: template
-                    value_template: "{{ estado_controlador == 'on' }}"
-                sequence:
-                  - service: homeassistant.turn_on
-                    target:
-                      entity_id: "{{ membros }}"
-              - conditions:
-                  - condition: template
-                    value_template: "{{ estado_controlador == 'off' }}"
-                sequence:
-                  - service: homeassistant.turn_off
-                    target:
-                      entity_id: "{{ membros }}"
+  # Envia comando ao grupo
+  - service: "homeassistant.turn_{{ novo_estado }}"
+    target:
+      entity_id: "{{ grupo }}"
