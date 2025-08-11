@@ -60,6 +60,6 @@ action:
       novo_estado: "{{ trigger.to_state.state }}"
   
   # Envia comando ao grupo
-  - service: "homeassistant.turn_{{ novo_estado }}"
+  - service: "light.turn_{{ novo_estado }}"
     target:
       entity_id: "{{ grupo }}"
